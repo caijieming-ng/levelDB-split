@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "db/bigtable.h"
 #include "db/db_impl.h"
 #include "db/version_set.h"
 #include "leveldb/cache.h"
@@ -60,16 +61,19 @@ static const char* FLAGS_benchmarks =
     "snappycomp,"
     "snappyuncomp,"
     "acquireload,"
+    "splittable,"
     ;
 */
 static const char* FLAGS_benchmarks =
-    "fillseq,"
+    //"fillseq,"
+    //"fillsync,"
+    //"fillrandom,"
     "readrandom,"
+    //"splittable,"
     ;
 
 // Number of key/values to place in database
-//static int FLAGS_num = 1000000;
-static int FLAGS_num = 1;
+static int FLAGS_num = 10000000;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
@@ -311,7 +315,8 @@ class Benchmark {
  private:
   Cache* cache_;
   const FilterPolicy* filter_policy_;
-  DB* db_;
+  //DB* db_;
+  BigTable *db_;
   int num_;
   int value_size_;
   int entries_per_batch_;
@@ -413,7 +418,7 @@ class Benchmark {
       }
     }
     if (!FLAGS_use_existing_db) {
-      DestroyDB(FLAGS_db, Options());
+      //DestroyDB(FLAGS_db, Options());
     }
   }
 
@@ -458,9 +463,12 @@ class Benchmark {
       } else if (name == Slice("fillseq")) {
         fresh_db = true;
         method = &Benchmark::WriteSeq;
+      } else if (name == Slice("splittable")) {
+        fresh_db = true;
+        method = &Benchmark::SplitTablet;
       } else if (name == Slice("fillbatch")) {
         fresh_db = true;
-        entries_per_batch_ = 1000;
+        entries_per_batch_ = 1;
         method = &Benchmark::WriteSeq;
       } else if (name == Slice("fillrandom")) {
         fresh_db = true;
@@ -521,7 +529,8 @@ class Benchmark {
           fprintf(stderr, "unknown benchmark '%s'\n", name.ToString().c_str());
         }
       }
-
+    
+      /*  
       if (fresh_db) {
         if (FLAGS_use_existing_db) {
           fprintf(stdout, "%-12s : skipped (--use_existing_db is true)\n",
@@ -530,11 +539,11 @@ class Benchmark {
         } else {
           delete db_;
           db_ = NULL;
-          DestroyDB(FLAGS_db, Options());
+          //DestroyDB(FLAGS_db, Options());
           Open();
         }
       }
-
+      */
       if (method != NULL) {
         RunBenchmark(num_threads, name, method);
       }
@@ -703,12 +712,14 @@ class Benchmark {
   void Open() {
     assert(db_ == NULL); // 打开数据库前，必须保证之前创建的数据库已经清空
     Options options;
+    /*
     options.create_if_missing = !FLAGS_use_existing_db;
     options.block_cache = cache_;
     options.write_buffer_size = FLAGS_write_buffer_size;
     options.max_open_files = FLAGS_open_files;
     options.filter_policy = filter_policy_;
-    Status s = DB::Open(options, FLAGS_db, &db_);
+    */
+    Status s = BigTable::Open(options, FLAGS_db, &db_);
     //exit(1);
     if (!s.ok()) {
       fprintf(stderr, "open error: %s\n", s.ToString().c_str());
@@ -727,6 +738,26 @@ class Benchmark {
   void WriteSeq(ThreadState* thread) {
     DoWrite(thread, true);
   }
+  
+  void SplitTablet(ThreadState* thread) {
+    ReadOptions options;
+    std::string value;
+    uint64_t tid = 1;
+    int found = 0;
+    for (int i = 0; i < 1; i++) {
+      char key[100];
+      const int k = thread->rand.Next() % FLAGS_num;
+      snprintf(key, sizeof(key), "%016d", k);
+      // 执行数据库的get接口，获得数据
+      if (db_->SplitTablet(tid).ok()) {
+        found++;
+      }
+      thread->stats.FinishedSingleOp();
+    }
+    char msg[100];
+    snprintf(msg, sizeof(msg), "(%d of %d found)", found, 1);
+    thread->stats.AddMessage(msg);
+  }
 
   void WriteRandom(ThreadState* thread) {
     DoWrite(thread, false);
@@ -740,33 +771,36 @@ class Benchmark {
     }
 
     RandomGenerator gen;
-    WriteBatch batch;
+    //WriteBatch batch;
     Status s;
     int64_t bytes = 0;
-    for (int i = 0; i < num_; i += entries_per_batch_) {
+    //for (int i = 0; i < num_; i += entries_per_batch_) {
+    for (int i = num_; i < (2 * num_); i += entries_per_batch_) {
       // 清空batch
-      batch.Clear();
+      //batch.Clear();
       // 构造若干个更新到batch
       for (int j = 0; j < entries_per_batch_; j++) {
         const int k = seq ? i+j : (thread->rand.Next() % FLAGS_num);
         char key[100];
         snprintf(key, sizeof(key), "%016d", k);
-        batch.Put(key, gen.Generate(value_size_));
+        //batch.Put(key, gen.Generate(value_size_));
+        s = db_->Put(write_options_, key, gen.Generate(value_size_));
+        if (!s.ok()) {
+          fprintf(stderr, "put error: %s\n", s.ToString().c_str());
+          exit(1);
+        }
         bytes += value_size_ + strlen(key);
         thread->stats.FinishedSingleOp();
       }
       // 执行数据库的写操作
-      s = db_->Write(write_options_, &batch);
-      if (!s.ok()) {
-        fprintf(stderr, "put error: %s\n", s.ToString().c_str());
-        exit(1);
-      }
+      //s = db_->Write(write_options_, &batch);
     }
     thread->stats.AddBytes(bytes);
   }
   
   // 顺序读, 使用scan遍历器
   void ReadSequential(ThreadState* thread) {
+  /*
     Iterator* iter = db_->NewIterator(ReadOptions());
     int i = 0;
     int64_t bytes = 0;
@@ -777,9 +811,11 @@ class Benchmark {
     }
     delete iter;
     thread->stats.AddBytes(bytes);
+  */
   }
 
   void ReadReverse(ThreadState* thread) {
+  /*
     Iterator* iter = db_->NewIterator(ReadOptions());
     int i = 0;
     int64_t bytes = 0;
@@ -790,6 +826,7 @@ class Benchmark {
     }
     delete iter;
     thread->stats.AddBytes(bytes);
+  */
   }
   
   // 随机读接口
@@ -801,9 +838,14 @@ class Benchmark {
       char key[100];
       const int k = thread->rand.Next() % FLAGS_num;
       snprintf(key, sizeof(key), "%016d", k);
+      if (memcmp(key, "0000000006147674", strlen("0000000006147674")) == 0) {
+        printf("bug key %s\n", key);
+      }
       // 执行数据库的get接口，获得数据
       if (db_->Get(options, key, &value).ok()) {
         found++;
+      } else {
+        printf("not found key %s\n", key);
       }
       thread->stats.FinishedSingleOp();
     }
@@ -836,8 +878,9 @@ class Benchmark {
       thread->stats.FinishedSingleOp();
     }
   }
-
+  
   void SeekRandom(ThreadState* thread) {
+  /*
     ReadOptions options;
     int found = 0;
     for (int i = 0; i < reads_; i++) {
@@ -853,26 +896,28 @@ class Benchmark {
     char msg[100];
     snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
     thread->stats.AddMessage(msg);
+  */
   }
 
   void DoDelete(ThreadState* thread, bool seq) {
     RandomGenerator gen;
-    WriteBatch batch;
+    //WriteBatch batch;
     Status s;
     for (int i = 0; i < num_; i += entries_per_batch_) {
-      batch.Clear();
+      //batch.Clear();
       for (int j = 0; j < entries_per_batch_; j++) {
         const int k = seq ? i+j : (thread->rand.Next() % FLAGS_num);
         char key[100];
         snprintf(key, sizeof(key), "%016d", k);
-        batch.Delete(key);
+        //batch.Delete(key);
+        s = db_->Delete(write_options_, key);
+        if (!s.ok()) {
+          fprintf(stderr, "del error: %s\n", s.ToString().c_str());
+          exit(1);
+        }
         thread->stats.FinishedSingleOp();
       }
-      s = db_->Write(write_options_, &batch);
-      if (!s.ok()) {
-        fprintf(stderr, "del error: %s\n", s.ToString().c_str());
-        exit(1);
-      }
+      //s = db_->Write(write_options_, &batch);
     }
   }
 
@@ -915,17 +960,20 @@ class Benchmark {
   }
 
   void Compact(ThreadState* thread) {
+    /*
     db_->CompactRange(NULL, NULL);
+    */
   }
-
+  
   void PrintStats(const char* key) {
+  /*
     std::string stats;
     if (!db_->GetProperty(key, &stats)) {
       stats = "(failed)";
     }
     fprintf(stdout, "\n%s\n", stats.c_str());
+  */
   }
-
   static void WriteToFile(void* arg, const char* buf, int n) {
     reinterpret_cast<WritableFile*>(arg)->Append(Slice(buf, n));
   }
@@ -953,7 +1001,7 @@ class Benchmark {
 int main(int argc, char** argv) {
   FLAGS_write_buffer_size = leveldb::Options().write_buffer_size;
   FLAGS_open_files = leveldb::Options().max_open_files;
-  std::string default_db_path;
+  std::string default_db_path("/tmp/BigTable-0");
 
   for (int i = 1; i < argc; i++) {
     double d;
@@ -995,8 +1043,8 @@ int main(int argc, char** argv) {
 
   // Choose a location for the test database if none given with --db=<path>
   if (FLAGS_db == NULL) {
-      leveldb::Env::Default()->GetTestDirectory(&default_db_path);
-      default_db_path += "/dbbench";
+      //leveldb::Env::Default()->GetTestDirectory(&default_db_path);
+      //default_db_path += "/dbbench";
       FLAGS_db = default_db_path.c_str();
   }
 
@@ -1004,3 +1052,5 @@ int main(int argc, char** argv) {
   benchmark.Run();
   return 0;
 }
+
+

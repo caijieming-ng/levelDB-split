@@ -34,6 +34,18 @@
 #include "util/mutexlock.h"
 
 namespace leveldb {
+#define BUG_ON(cond)                                          \
+    do {                                                      \
+      if ((cond) == true) {                                   \
+        BUG();                                                \
+      }                                                       \
+    } while (0)                                         
+
+#define BUG()                                                 \
+    do {                                                      \
+      printf("%s: LINE %d, BUG...\n", __func__, __LINE__);    \
+      assert(0);                                              \
+    } while(0) 
 
 const int kNumNonTableCacheFiles = 10;
 
@@ -132,8 +144,8 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       dbname_(dbname),
       db_lock_(NULL),
       shutting_down_(NULL),
-      bg_cv_(&mutex_), // 与后台工作线程同步的条件变量
-      mem_(new MemTable(internal_comparator_)), // memtable的空间分配
+      bg_cv_(&mutex_), 
+      mem_(new MemTable(internal_comparator_)), 
       imm_(NULL),
       logfile_(NULL),
       logfile_number_(0),
@@ -141,7 +153,8 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       seed_(0),
       tmp_batch_(new WriteBatch),
       bg_compaction_scheduled_(false),
-      manual_compaction_(NULL) {
+      manual_compaction_(NULL),
+      barrier_cv(&barrier_lock) {
   mem_->Ref();
   has_imm_.Release_Store(NULL);
 
@@ -169,6 +182,8 @@ DBImpl::~DBImpl() {
   }
 
   delete versions_;
+  // why mem and imm need ref? 
+  // because mem and imm's lifecircle is much shorter than DBImpl.
   if (mem_ != NULL) mem_->Unref();
   if (imm_ != NULL) imm_->Unref();
   delete tmp_batch_;
@@ -661,6 +676,7 @@ void DBImpl::MaybeScheduleCompaction() {
              manual_compaction_ == NULL &&
              !versions_->NeedsCompaction()) {
     // No work to be done
+    EnableSplit();
   } else {
     //设置后台compact标志,创建线程执行后台任务
     bg_compaction_scheduled_ = true;
@@ -1242,6 +1258,7 @@ Status DBImpl::Get(const ReadOptions& options,
   // 若执行过sst读，且根据查询的sst及level，若该sst的查询次数达到上限，
   // 则触发compact操作
   if (have_stat_update && current->UpdateStats(stats)) {
+    DisableSplit();
     MaybeScheduleCompaction();
   }
   // 解引用
@@ -1482,6 +1499,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       Log(options_.info_log, "Too many L0 files; waiting...\n");
       bg_cv_.Wait();
     } else {
+      DisableSplit();
       // Attempt to switch to a new memtable and trigger compaction of old
       assert(versions_->PrevLogNumber() == 0); // 此时不然不存在minor compact操作
       // 获得一个新的可用的日志文件号
@@ -1679,6 +1697,143 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
     env->DeleteDir(dbname);  // Ignore error in case dir contains other files
   }
   return result;
+}
+
+// added by CJM's split code flow
+#include <unistd.h>
+Status DBImpl::PickSplitKey(InternalKey* ikey)
+{
+  return versions_->PickSplitKey(ikey);
+}
+
+Status DBImpl::ReplicateDB(const std::string newtablet)
+{
+  Status s;
+  s = env_->CreateDir(newtablet);
+  
+  // create hard link to .sst or .ldb
+  std::vector<std::string> filenames;
+  env_->GetChildren(dbname_, &filenames);
+  uint64_t number;
+  FileType type;
+  for (int i = 0; i < filenames.size(); i++) {
+    if (ParseFileName(filenames[i], &number, &type) && (type == kTableFile)) {
+      std::string destname = newtablet + "/" + filenames[i];
+      std::string srcname = dbname_ + "/" + filenames[i];
+      BUG_ON(link(srcname.c_str(), destname.c_str()));
+    }
+  }
+  
+  // clone manifest file
+  std::string dsname = GetCurrentDescriptorName();
+  std::string dspath = newtablet + "/" + GetCurrentDescriptorName();
+  WritableFile* file;
+  s = env_->NewWritableFile(dspath, &file);
+  BUG_ON(!s.ok());
+  delete file;
+  
+  // create current file
+  BUG_ON(!ParseFileName(dsname, &number, &type));
+  s = SetCurrentFile(env_, newtablet, number);
+  BUG_ON(!s.ok());
+  return s;
+}
+
+std::string DBImpl::GetCurrentDescriptorName()
+{
+  std::string current;
+  Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
+  BUG_ON(!s.ok());
+  if (current.empty() || current[current.size()-1] != '\n') {
+    BUG();
+  }
+  current.resize(current.size() - 1);
+  return current;
+}
+
+Status DBImpl::SplitDS(const std::string newtablet, InternalKey& ikey)
+{
+  Status s;
+  std::string dsname = GetCurrentDescriptorName();
+  std::string srcName = dbname_ + "/" + dsname;
+  std::string tmpName = dbname_ + "/split.tmpname";
+  std::string destName = newtablet + "/" + dsname;
+  
+  // read flow
+  SequentialFile* src = NULL;
+  s = env_->NewSequentialFile(srcName, &src);
+  BUG_ON(!s.ok());
+  log::Reader reader(src, NULL, true, 0);    
+  std::string scratch;
+  Slice record;
+  
+  // dest write flow
+  WritableFile* DestFile = NULL;
+  s = env_->NewWritableFile(destName, &DestFile);
+  BUG_ON(!s.ok());
+  log::Writer DestWriter(DestFile); 
+  
+  // src write flow
+  WritableFile* SrcFile = NULL;
+  s = env_->NewWritableFile(tmpName, &SrcFile);
+  BUG_ON(!s.ok());
+  log::Writer SrcWriter(SrcFile); 
+
+  while (reader.ReadRecord(&record, &scratch)) {
+    // split dest dataTablet
+    VersionEdit DestEdit;
+    s = DestEdit.DecodeFrom(record);
+    BUG_ON(!s.ok());
+    
+    s = DestEdit.SplitEdit(ikey, internal_comparator_, SPLIT_LEFT);
+    BUG_ON(!s.ok());
+
+    std::string DestRecord;
+    DestEdit.EncodeTo(&DestRecord);
+    s = DestWriter.AddRecord(DestRecord);
+    BUG_ON(!s.ok());
+    
+    // split source dataTablet
+    VersionEdit SrcEdit;
+    s = SrcEdit.DecodeFrom(record);
+    BUG_ON(!s.ok());
+
+    s = SrcEdit.SplitEdit(ikey, internal_comparator_, SPLIT_RIGHT);
+    BUG_ON(!s.ok());
+    
+    std::string SrcRecord;
+    SrcEdit.EncodeTo(&SrcRecord);
+    s = SrcWriter.AddRecord(SrcRecord);
+    BUG_ON(!s.ok());
+  }
+  delete src;
+  delete DestFile;
+  delete SrcFile;
+ 
+  s = env_->RenameFile(tmpName, srcName);
+  BUG_ON(!s.ok());
+
+  return s; 
+}
+
+Status DBImpl::SplitTablet(const std::string newtablet, std::string* newkey)
+{
+  Status s, s1;
+  InternalKey ikey;
+   
+  SplitWait();
+  s1 = PickSplitKey(&ikey);
+  if (s1.IsNotFound())
+    return s;
+  BUG_ON(!s1.ok());
+
+  s = ReplicateDB(newtablet);
+  BUG_ON(!s.ok());
+  s = SplitDS(newtablet, ikey);
+  BUG_ON(!s.ok());
+
+  *newkey = ikey.user_key().ToString();
+  return s;
 }
 
 }  // namespace leveldb

@@ -290,6 +290,9 @@ class VersionSet {
   };
   const char* LevelSummary(LevelSummaryStorage* scratch) const;
 
+  // added by CJM
+  Status PickSplitKey(InternalKey* ikey) const;
+
  private:
   class Builder;
 

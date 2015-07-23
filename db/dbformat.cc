@@ -57,6 +57,15 @@ int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
   //    decreasing sequence number
   //    decreasing type (though sequence# should be enough to disambiguate)
   //    比较用户key, 采用字典序比较
+  Slice userAkey = ExtractUserKey(akey);
+  Slice userBkey = ExtractUserKey(bkey);
+  if (memcmp(userAkey.data(), "CJM-max-key", strlen("CJM-max-key")) == 0) {
+    return -1;
+  }
+  if (memcmp(userBkey.data(), "CJM-max-key", strlen("CJM-max-key")) == 0) {
+    return 1;
+  }
+
   int r = user_comparator_->Compare(ExtractUserKey(akey), ExtractUserKey(bkey));
   if (r == 0) {
     // 比较序列号

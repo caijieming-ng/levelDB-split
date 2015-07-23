@@ -1604,4 +1604,22 @@ void Compaction::ReleaseInputs() {
   }
 }
 
+// added by CJM
+Status VersionSet::PickSplitKey(InternalKey* ikey) const {
+  Status s;
+  Version* v = current_;
+  for (int i = config::kNumLevels - 1; i >= 0; i--) {
+    std::vector<FileMetaData*>& files = v->files_[i];
+    if (files.size() == 0)
+      continue;
+    
+    int mid = files.size() / 2;
+    const FileMetaData* f = files[mid];
+    *ikey = f->largest;
+    return s;
+  }
+  s = Status::NotFound(Slice());  // Use empty error message for speed
+  return s;
+}
+
 }  // namespace leveldb

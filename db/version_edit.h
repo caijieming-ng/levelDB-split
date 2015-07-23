@@ -26,6 +26,11 @@ struct FileMetaData {
   FileMetaData() : refs(0), allowed_seeks(1 << 30), file_size(0) { }
 };
 
+enum SplitDirect {
+  SPLIT_LEFT,
+  SPLIT_RIGHT,
+};
+
 class VersionEdit {
  public:
   VersionEdit() { Clear(); }
@@ -83,6 +88,9 @@ class VersionEdit {
   Status DecodeFrom(const Slice& src);
 
   std::string DebugString() const;
+  
+  // Added by CJM
+  Status SplitEdit(InternalKey& ikey, const InternalKeyComparator& icmp, int direct); 
 
  private:
   friend class VersionSet;

@@ -272,4 +272,52 @@ std::string VersionEdit::DebugString() const {
   return r;
 }
 
+Status VersionEdit::SplitEdit(InternalKey& ikey, 
+                    const InternalKeyComparator& icmp,
+                    int direct) 
+{
+  Status s;
+  //clear compact_pointer
+  compact_pointers_.clear();
+  std::vector<FileMetaData*> EraseFile;
+  
+  for (int i = 0; i < new_files_.size(); i++) {
+    if (direct == SPLIT_LEFT) {
+      //int level = new_files_[i].first;
+      FileMetaData& f = new_files_[i].second;
+      /*const InternalKey& prev_end = v->files_[level][i-1]->largest;
+        const InternalKey& this_begin = v->files_[level][i]->smallest;
+        if (vset_->icmp_.Compare(prev_end, this_begin) >= 0) {
+        int FindFile(const InternalKeyComparator& icmp,
+        const std::vector<FileMetaData*>& files,
+        const Slice& key) {
+        */
+      if (icmp.Compare(ikey, f.smallest) < 0) {
+        EraseFile.push_back(&(new_files_[i].second)); 
+      } else if (icmp.Compare(f.largest, ikey) >= 0) {
+        f.largest = ikey;
+      }
+    } else { // right half
+      FileMetaData& f = new_files_[i].second;
+      
+      if (icmp.Compare(ikey, f.largest) >= 0) {
+        EraseFile.push_back(&(new_files_[i].second)); 
+      } else if (icmp.Compare(f.smallest, ikey) < 0) {
+        f.smallest = ikey;
+      }
+    }
+  }
+  
+  for (int i = 0; i < EraseFile.size(); i++) {
+    FileMetaData* f = EraseFile[i];
+    for (int j = 0; j < new_files_.size(); j++) {
+      if (f == &(new_files_[j].second)) {
+        new_files_.erase(new_files_.begin() + j);
+        break;
+      }
+    }
+  }
+  return s;
+}
+
 }  // namespace leveldb

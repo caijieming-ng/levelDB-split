@@ -64,6 +64,50 @@ class DBImpl : public DB {
   // Samples are taken approximately once every config::kReadBytesPeriod
   // bytes.
   void RecordReadSample(Slice key);
+  
+  // ###############################################
+  // external split interface added by CJM
+ public:
+  // newtablet's dir
+  Status SplitTablet(const std::string newtablet, std::string* newkey);
+
+ private:
+  Status SplitDS(const std::string newtablet, InternalKey& ikey);
+  
+  Status PickSplitKey(InternalKey* ikey);
+  
+  // newtablet's dir
+  Status ReplicateDB(const std::string newtablet);
+
+  std::string GetCurrentDescriptorName();
+  
+  void DisableSplit() {
+    pending_compact = true;
+  }
+
+  void EnableSplit() {
+    pending_compact = false;
+    barrier_cv.SignalAll();
+  }
+
+  void SplitWait() {
+    barrier_lock.Lock();
+    while (true) {
+      if (!pending_compact) {
+        break;
+      }
+      barrier_cv.Wait();
+    }
+    barrier_lock.Unlock();
+  }
+  
+  // before compact begin, set this flag;
+  // after compact finish, clear this flag;
+  bool pending_compact;
+  port::Mutex barrier_lock;
+  port::CondVar barrier_cv; // before split, wait until all compact finish
+
+  // ###############################################
 
  private:
   friend class DB;
