@@ -211,6 +211,8 @@ Status BigTable::Put(const WriteOptions& opt, const Slice& key,
     if (t == t2)
       break;
     t->rwlock.Unlock();
+
+    t = t2;
   }
   
   Status s = t->db->Put(opt, key, value);
@@ -228,6 +230,8 @@ Status BigTable::Delete(const WriteOptions& opt, const Slice& key)
     if (t == t2)
       break;
     t->rwlock.Unlock();
+
+    t = t2;
   }
   
   Status s = t->db->Delete(opt, key);
@@ -246,6 +250,8 @@ Status BigTable::Get(const ReadOptions& opt, const Slice& key,
     if (t == t2)
       break;
     t->rwlock.Unlock();
+
+    t = t2;
   }
   
   Status s = t->db->Get(opt, key, value);
