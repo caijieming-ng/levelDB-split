@@ -1,0 +1,101 @@
+leveldb的split流程设计：
+splitds():
+  1、从parent读取edit
+  2、获得add_files[]
+  3、遍历add_files的每个元素f
+    3.1 若f.small <= splitkey且f.large >= splitkey
+      左f.large = splitkey
+      logandapply
+    3.2 若f.small > splitkey
+      nothing to do
+    3.3 若f.large < splitkey
+      logandapply
+picksplitkey():
+  1、从高向低遍历version的每一层区间
+  2、获得中间的区间f
+  3、返回f.largest作为splitkey
+
+replicatedb():
+  1、在bigtable目录下，创建1tablet目录（假设目前待分裂的是tablet0）
+  2、获得tablet0下的所有sst列表
+  3、对每个sst文件，在tablet1上创建硬链接文件
+  4、在tablet1上创建manifest空文件
+
+leveldb::splittablet:
+  1、splitWait，等待compact所有后台compact完成
+  2、使能compact；//注意此时读写请求都被阻塞，所以不会产生compact
+  3、picksplitkey()获得分裂key
+  4、replicatdb()产生镜像目录
+  5、打开tablet1的manifest文件
+  6、splitds()构建tablet1的manifest
+
+compact流程的修改：
+  1、get/write流程中，调用maybescheduleCompaction前，调用disableSplit
+  2、MaybeScheduleCompaction()内部needcompact判断失败后，enableSplit
+
+disableSplit：
+  1、设置pending_compact标识
+
+enableSplit：
+  1、清除pending_compact标识，唤醒split线程
+
+splitWait：
+  1、while (1) {
+    if (pending_compact == true) {
+      wait; 
+    } else {
+      break;
+    }
+  }
+
+###########################################################
+bigtable {
+  meta tablet；//用于描述数据tablet的最大值区间
+  lock; // 保护tablet的插入
+  tablet {
+    maxkey；//内部key
+    barrier; // 停止tablet的写，保证barrier前的写完成，barrier后的写阻塞；利用读写锁实现
+    leveldb;// 内部的leveldb句柄
+  }[]；//tablet按照maxkey升序排列
+}；
+
+###########################################################
+metatablet的表设计，初始时，tablet0保证可管理的最大key是无限：
++---------------+--------------+
+| tablet-name   |    maxkey    |
++---------------+--------------+
+
+bigtable的外部接口：
+  open：
+    1、创建目录/tmp/bigtable/，打开metatablet（/tmp/bigtable/metaTablet）
+    2、获得所有datatablet的名字(readdir(/tmp/bigtable))
+    3、使用datatablet名字在metatablet中查找对应的maxkey
+      若找到，opentablet()：则打开数据库，创建tablet的内存结构
+    否则，删除datatablet目录
+
+  get/put/delete：
+    1、locatetablet()
+    2、获得tablet.barrier的读锁
+    3、locatetablet()，比较前后两个tablet是否一致。若否，则说明发生分裂，释放读锁，返回步骤2。
+    3、将请求转发给leveldb
+    4、操作完成，释放tablet.barrier的读锁
+    5、请求向上返回
+
+  bigtable::split()
+    1、调用leveldb的memtablecompact接口，执行mirror compact
+    2、获得tablet.barrier的写锁
+    3、调用leveldb的memtablecompact接口，执行mirror compact
+    4、tablet_num=getNewTabletNum()，分配一个新的tablet号
+    5、调用leveldb::splittablset(tablet_num)接口，执行tablet分裂；返回前半段的最大key
+    6、metatablet增加tablet_num的对应的记录
+    7、调用opentablet启动新的tablet
+    8、释放tablet.barrier的写锁，
+
+  bigtable的内部函数：
+    getNewTabletNum():
+      1、简单的使用本地时间戳返回序列号
+
+    locatetablet()：
+      1、返回第一个tablet，满足tablet.maxkey >= target
+      问题：maxkey是内部key，target是用户key，怎么比较
+
