@@ -501,6 +501,7 @@ void Version::Ref() {
 }
 
 void Version::Unref() {
+  // must delete from versionset's double list
   assert(this != &vset_->dummy_versions_);
   assert(refs_ >= 1);
   --refs_;

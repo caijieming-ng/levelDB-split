@@ -65,11 +65,10 @@ static const char* FLAGS_benchmarks =
     ;
 */
 static const char* FLAGS_benchmarks =
-    //"fillseq,"
-    //"fillsync,"
-    //"fillrandom,"
+    "fillseq,"
     "readrandom,"
-    //"splittable,"
+    "splittable,"
+    "readrandom,"
     ;
 
 // Number of key/values to place in database
@@ -530,7 +529,7 @@ class Benchmark {
         }
       }
     
-      /*  
+      /*
       if (fresh_db) {
         if (FLAGS_use_existing_db) {
           fprintf(stdout, "%-12s : skipped (--use_existing_db is true)\n",
@@ -774,8 +773,8 @@ class Benchmark {
     //WriteBatch batch;
     Status s;
     int64_t bytes = 0;
-    //for (int i = 0; i < num_; i += entries_per_batch_) {
-    for (int i = num_; i < (2 * num_); i += entries_per_batch_) {
+    for (int i = 0; i < num_; i += entries_per_batch_) {
+    //for (int i = num_; i < (2 * num_); i += entries_per_batch_) {
       // 清空batch
       //batch.Clear();
       // 构造若干个更新到batch
@@ -836,16 +835,14 @@ class Benchmark {
     int found = 0;
     for (int i = 0; i < reads_; i++) {
       char key[100];
-      const int k = thread->rand.Next() % FLAGS_num;
+      //const int k = thread->rand.Next() % FLAGS_num;
+      const int k = i;
       snprintf(key, sizeof(key), "%016d", k);
-      if (memcmp(key, "0000000006147674", strlen("0000000006147674")) == 0) {
-        printf("bug key %s\n", key);
-      }
       // 执行数据库的get接口，获得数据
       if (db_->Get(options, key, &value).ok()) {
         found++;
       } else {
-        printf("not found key %s\n", key);
+        printf("bug key %d\n", k);
       }
       thread->stats.FinishedSingleOp();
     }

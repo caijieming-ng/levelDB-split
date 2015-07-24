@@ -1774,11 +1774,12 @@ Status DBImpl::SplitDS(const std::string newtablet, InternalKey& ikey)
   log::Writer DestWriter(DestFile); 
   
   // src write flow
+  /*
   WritableFile* SrcFile = NULL;
   s = env_->NewWritableFile(tmpName, &SrcFile);
   BUG_ON(!s.ok());
   log::Writer SrcWriter(SrcFile); 
-
+  */
   while (reader.ReadRecord(&record, &scratch)) {
     // split dest dataTablet
     VersionEdit DestEdit;
@@ -1792,8 +1793,11 @@ Status DBImpl::SplitDS(const std::string newtablet, InternalKey& ikey)
     DestEdit.EncodeTo(&DestRecord);
     s = DestWriter.AddRecord(DestRecord);
     BUG_ON(!s.ok());
+    s = DestFile->Sync();
+    BUG_ON(!s.ok());
     
     // split source dataTablet
+    /*
     VersionEdit SrcEdit;
     s = SrcEdit.DecodeFrom(record);
     BUG_ON(!s.ok());
@@ -1805,14 +1809,17 @@ Status DBImpl::SplitDS(const std::string newtablet, InternalKey& ikey)
     SrcEdit.EncodeTo(&SrcRecord);
     s = SrcWriter.AddRecord(SrcRecord);
     BUG_ON(!s.ok());
+    */
   }
+
   delete src;
   delete DestFile;
+  /*
   delete SrcFile;
  
   s = env_->RenameFile(tmpName, srcName);
   BUG_ON(!s.ok());
-
+  */
   return s; 
 }
 

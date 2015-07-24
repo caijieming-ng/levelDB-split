@@ -75,7 +75,8 @@ class MemTable {
   };
   friend class MemTableIterator;
   friend class MemTableBackwardIterator;
-
+  
+  // skiplist = a set of struct Node
   typedef SkipList<const char*, KeyComparator> Table;
 
   KeyComparator comparator_; // key的比较函数

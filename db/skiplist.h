@@ -191,7 +191,7 @@ SkipList<Key,Comparator>::NewNode(const Key& key, int height) {
   // 从arena分配器分配node空间和height-1个指针的空间
   char* mem = arena_->AllocateAligned(
       sizeof(Node) + sizeof(port::AtomicPointer) * (height - 1));
-  return new (mem) Node(key);
+  return new (mem) Node(key); // new : malloc memory from *mem, and construct Node from *mem;
 }
 
 // 初始化一个遍历器, 包含跳表和结果的node

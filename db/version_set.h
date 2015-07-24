@@ -330,7 +330,7 @@ class VersionSet {
 
   // Opened lazily
   WritableFile* descriptor_file_;
-  log::Writer* descriptor_log_;
+  log::Writer* descriptor_log_; // must ->sync() before close file
   Version dummy_versions_;  // Head of circular doubly-linked list of versions.
   Version* current_;        // == dummy_versions_.prev_
 

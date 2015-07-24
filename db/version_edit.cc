@@ -279,8 +279,33 @@ Status VersionEdit::SplitEdit(InternalKey& ikey,
   Status s;
   //clear compact_pointer
   compact_pointers_.clear();
-  std::vector<FileMetaData*> EraseFile;
+  std::vector<uint64_t> EraseFile;
+  std::vector<std::pair<int, FileMetaData> > tmpFM;
   
+  std::vector<std::pair<int, FileMetaData> >::iterator it = new_files_.begin();
+  while (it != new_files_.end()) {
+    FileMetaData& f = it->second;
+    if (direct == SPLIT_LEFT) {
+      if (icmp.Compare(ikey, f.smallest) < 0) {
+        it = new_files_.erase(it);
+        continue;
+      } else if (icmp.Compare(f.largest, ikey) >= 0) {
+        f.largest = ikey;
+      }
+    } else {
+      if (icmp.Compare(ikey, f.largest) >= 0) {
+        it = new_files_.erase(it);
+        continue;
+      } else if (icmp.Compare(f.smallest, ikey) < 0) {
+        f.smallest = ikey;
+      }
+    }
+    it++;
+  }
+  
+  goto out;
+  
+  // discard below
   for (int i = 0; i < new_files_.size(); i++) {
     if (direct == SPLIT_LEFT) {
       //int level = new_files_[i].first;
@@ -293,30 +318,25 @@ Status VersionEdit::SplitEdit(InternalKey& ikey,
         const Slice& key) {
         */
       if (icmp.Compare(ikey, f.smallest) < 0) {
-        EraseFile.push_back(&(new_files_[i].second)); 
+        //EraseFile.push_back(&(new_files_[i].second)); 
       } else if (icmp.Compare(f.largest, ikey) >= 0) {
         f.largest = ikey;
+        tmpFM.push_back(new_files_[i]);
+      } else {
+        tmpFM.push_back(new_files_[i]);
       }
     } else { // right half
-      FileMetaData& f = new_files_[i].second;
-      
-      if (icmp.Compare(ikey, f.largest) >= 0) {
-        EraseFile.push_back(&(new_files_[i].second)); 
-      } else if (icmp.Compare(f.smallest, ikey) < 0) {
-        f.smallest = ikey;
-      }
+    
     }
   }
   
-  for (int i = 0; i < EraseFile.size(); i++) {
-    FileMetaData* f = EraseFile[i];
-    for (int j = 0; j < new_files_.size(); j++) {
-      if (f == &(new_files_[j].second)) {
-        new_files_.erase(new_files_.begin() + j);
-        break;
-      }
-    }
+  new_files_.clear();
+  for (int i = 0; i < tmpFM.size(); i++) {
+    new_files_.push_back(tmpFM[i]);
   }
+
+out:
+  //printf("sizeof new_files_ %u\n", new_files_.size());
   return s;
 }
 
