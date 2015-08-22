@@ -286,10 +286,10 @@ Status VersionEdit::SplitEdit(InternalKey& ikey,
   while (it != new_files_.end()) {
     FileMetaData& f = it->second;
     if (direct == SPLIT_LEFT) {
-      if (icmp.Compare(ikey, f.smallest) < 0) {
+      if (icmp.Compare(ikey, f.smallest) <= 0) {
         it = new_files_.erase(it);
         continue;
-      } else if (icmp.Compare(f.largest, ikey) >= 0) {
+      } else if (icmp.Compare(f.largest, ikey) > 0) {
         f.largest = ikey;
       }
     } else {
